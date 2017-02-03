@@ -12,23 +12,23 @@ import (
 	"strings"
 )
 
-type Doc struct {
+type doc struct {
 	name  string
 	size  int
 	score float64
 }
 
-type Posting struct {
+type posting struct {
 	docID int
 	fdt   int
 }
 
 type InvIndex struct {
-	index       map[string][]Posting
-	docsIndexed []*Doc
+	index       map[string][]posting
+	docsIndexed []doc
 }
 
-type ByScore []*Doc
+type byScore []doc
 
 func WriteHeader(file *os.File) {
 	fmt.Fprintf(file, "File Name, Size(words), Score\n")
@@ -42,7 +42,7 @@ func SafeOpenFile() *os.File {
 	return file
 }
 
-func WriteToFile(file *os.File, d *Doc) {
+func WriteToFile(file *os.File, d doc) {
 	fmt.Fprintf(file, "%s,%d,%.4f\n", d.name, d.size, d.score)
 }
 
@@ -55,8 +55,8 @@ func CloseFile(file *os.File) {
 
 func NewIndex() *InvIndex {
 	var inv InvIndex
-	inv.index = make(map[string][]Posting)
-	inv.docsIndexed = make([]*Doc, 0, 0)
+	inv.index = make(map[string][]posting)
+	inv.docsIndexed = make([]doc, 0, 0)
 	return &inv
 }
 
@@ -67,8 +67,8 @@ func (inv *InvIndex) IndexDocument(path string) error {
 	}
 
 	x := len(inv.docsIndexed)
-	inv.docsIndexed = append(inv.docsIndexed, &Doc{filepath.Base(path), 0, 0.0})
-	pdoc := inv.docsIndexed[x]
+	inv.docsIndexed = append(inv.docsIndexed, doc{filepath.Base(path), 0, 0.0})
+	pdoc := &inv.docsIndexed[x]
 
 	data, err := ioutil.ReadAll(file)
 	if err != nil {
@@ -86,44 +86,29 @@ func (inv *InvIndex) IndexDocument(path string) error {
 			pdoc.size++
 			continue
 		}
-		inv.index[lword] = append(list, Posting{x + 1, 1})
+		inv.index[lword] = append(list, posting{x + 1, 1})
 		pdoc.size++
 	}
 	return nil
 }
 
-func (inv *InvIndex) ComputeCollectionSize() int {
+func (inv *InvIndex) computeCollectionSize() int {
 	var totalNumberOfWords int
 
-	for _, in := range inv.index {
-		for _, i := range in {
-			totalNumberOfWords += i.fdt
-		}
+	for _, in := range inv.docsIndexed {
+		totalNumberOfWords += in.size
 	}
 	return totalNumberOfWords
 }
 
-func (inv *InvIndex) NumberOfDocuments() int {
-	var numOfDocs int
-
-	for _, in := range inv.index {
-		for _, i := range in {
-			if i.docID > numOfDocs {
-				numOfDocs = i.docID
-			}
-		}
-	}
-	return numOfDocs
+func (inv *InvIndex) numberOfDocuments() int {
+	return len(inv.docsIndexed)
 }
 
-func (inv *InvIndex) NumOfQueryDocs(term string) int {
-	return len(inv.index[term])
-}
-
-func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]*Doc, error) {
+func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 	query := make(map[string]int)
-	collectionSize := float64(inv.ComputeCollectionSize())
-	N := float64(inv.NumberOfDocuments())
+	collectionSize := float64(inv.computeCollectionSize())
+	N := float64(inv.numberOfDocuments())
 	k1 := 1.2
 	b := 0.75
 	k3 := 100000.00
@@ -149,9 +134,9 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]*Doc, error) {
 			}
 		}
 	}
-	sort.Sort(ByScore(inv.docsIndexed))
+	sort.Sort(byScore(inv.docsIndexed))
 
-	var results []*Doc
+	var results []doc
 
 	for i := 0; i < num; i++ {
 		results = append(results, inv.docsIndexed[i])
@@ -160,8 +145,8 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]*Doc, error) {
 	return results, nil
 }
 
-func (d ByScore) Len() int { return len(d) }
+func (d byScore) Len() int { return len(d) }
 
-func (d ByScore) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
+func (d byScore) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
-func (d ByScore) Less(i, j int) bool { return d[i].score > d[j].score }
+func (d byScore) Less(i, j int) bool { return d[i].score > d[j].score }
