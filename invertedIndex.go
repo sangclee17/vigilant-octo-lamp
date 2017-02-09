@@ -19,8 +19,8 @@ type doc struct {
 }
 
 type posting struct {
-	docID int
-	fdt   int
+	docID []byte
+	freq  []byte
 }
 
 type InvIndex struct {
@@ -65,7 +65,7 @@ func (inv *InvIndex) IndexDocument(path string) error {
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	termCount := make(map[string]int)
 	x := len(inv.docsIndexed)
 	inv.docsIndexed = append(inv.docsIndexed, doc{filepath.Base(path), 0, 0.0})
 	pdoc := &inv.docsIndexed[x]
@@ -79,39 +79,29 @@ func (inv *InvIndex) IndexDocument(path string) error {
 		bword := bytes.Trim(bword, ".,-~?!\"'`;:()<>[]{}\\|/=_+*&^%$#@")
 		word := string(bword)
 		lword := strings.ToLower(word)
+		termCount[lword]++
 		list := inv.index[lword]
 		l := len(list)
-		if l > 0 && list[l-1].docID == x+1 {
-			list[l-1].fdt++
+		if l > 0 {
+			docIDInt := decodeVariant(list[l-1].docID)
+			if docIDInt == x+1 {
+				vFreq := encodeVariant(termCount[lword])
+				list[l-1].freq = vFreq
+				pdoc.size++
+				continue
+			} else {
+				vDocID := encodeVariant(x + 1)
+				inv.index[lword] = append(list, posting{vDocID, []byte{uint8(1)}})
+				pdoc.size++
+				continue
+			}
+		} else {
+			vDocID := encodeVariant(x + 1)
+			inv.index[lword] = append(list, posting{vDocID, []byte{uint8(1)}})
 			pdoc.size++
-			continue
 		}
-		inv.index[lword] = append(list, posting{x + 1, 1})
-		pdoc.size++
 	}
 	return nil
-}
-
-func (inv *InvIndex) CompressIndex() []byte {
-	var last int
-	for i := range inv.index {
-		for j := range inv.index[i] {
-			current := inv.index[i][j].docID
-			inv.index[i][j].docID = current - last
-			last = current
-		}
-	}
-
-	compressed := make([]uint8, 0, 0)
-	for i := range inv.index {
-		for j := range inv.index[i] {
-			vByte := encodeVariant(inv.index[i][j].docID)
-			for _, v := range vByte {
-				compressed = append(compressed, v)
-			}
-		}
-	}
-	return compressed
 }
 
 func encodeVariant(num int) []uint8 {
@@ -124,37 +114,17 @@ func encodeVariant(num int) []uint8 {
 	return output
 }
 
-func (inv *InvIndex) DecompressIndex(compressed []uint8) {
-	result := make([]int, 0, 0)
-	var temp int
-	var k int
-
-	for i := range compressed {
-		temp |= (int(compressed[i]) & 127) << (7 * uint8(k))
-		if (compressed[i] & 128) != 128 {
-			result = append(result, temp)
-			temp, k = 0, 0
-			continue
+func decodeVariant(num []uint8) int {
+	var res int
+	var i int
+	for {
+		res |= (int(num[i]) & 127) << (7 * uint8(i))
+		if (num[i] & 128) != 128 {
+			break
 		}
-		k++
+		i++
 	}
-
-	var x int
-	for i := range inv.index {
-		for j := range inv.index[i] {
-			inv.index[i][j].docID = result[x]
-			x++
-		}
-	}
-
-	var last int
-	for i := range inv.index {
-		for j := range inv.index[i] {
-			delta := inv.index[i][j].docID
-			inv.index[i][j].docID = delta + last
-			last = inv.index[i][j].docID
-		}
-	}
+	return res
 }
 
 func (inv *InvIndex) computeCollectionSize() int {
@@ -182,7 +152,6 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 	for _, val := range str {
 		(query[strings.ToLower(val)])++
 	}
-
 	for i := 0; i < len(query); i++ {
 		if num, ok := query[str[i]]; ok {
 			ft := float64(len(inv.index[str[i]]))
@@ -191,11 +160,13 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 			wa := collectionSize / N
 			qlist := inv.index[str[i]]
 			for j := range qlist {
-				fdt := float64(qlist[j].fdt)
-				wd := float64(inv.docsIndexed[qlist[j].docID-1].size)
+				currentFreq := decodeVariant(qlist[j].freq)
+				fdt := float64(currentFreq)
+				currentDocID := decodeVariant(qlist[j].docID)
+				wd := float64(inv.docsIndexed[currentDocID-1].size)
 				Kd := k1 * ((1.0 - b) + b*wd/wa)
 				wdt := (k1 + 1.0) * fdt / (Kd + fdt)
-				inv.docsIndexed[qlist[j].docID-1].score += wqt * wdt
+				inv.docsIndexed[currentDocID-1].score += wqt * wdt
 			}
 		}
 	}
