@@ -16,6 +16,7 @@ type doc struct {
 	name  string
 	size  int
 	score float64
+	docID int
 }
 
 type posting struct {
@@ -45,6 +46,11 @@ func SafeOpenFile() *os.File {
 func WriteToFile(file *os.File, d doc) {
 	fmt.Fprintf(file, "%s,%d,%.4f\n", d.name, d.size, d.score)
 }
+func (inv *InvIndex) Write() {
+	for _, v := range inv.docsIndexed {
+		fmt.Println(v.name)
+	}
+}
 
 func CloseFile(file *os.File) {
 	err := file.Close()
@@ -60,6 +66,40 @@ func NewIndex() *InvIndex {
 	return &inv
 }
 
+func (inv *InvIndex) SearchDocuments(rootpath string, check bool) {
+
+	err := filepath.Walk(rootpath, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+		if !check && filepath.Ext(path) == ".txt" {
+			if err := inv.IndexDocument(path); err != nil {
+				log.Fatal(err)
+			}
+		} else if check && filepath.Ext(path) == ".txt" {
+			if inv.checkingNewDocument(filepath.Base(path)) {
+				if err := inv.IndexDocument(path); err != nil {
+					log.Fatal(err)
+				}
+			}
+			return nil
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (inv *InvIndex) checkingNewDocument(fname string) bool {
+	for _, v := range inv.docsIndexed {
+		if v.name == fname {
+			return false
+		}
+	}
+	return true
+}
+
 func (inv *InvIndex) IndexDocument(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -67,7 +107,7 @@ func (inv *InvIndex) IndexDocument(path string) error {
 	}
 	termCount := make(map[string]int)
 	x := len(inv.docsIndexed)
-	inv.docsIndexed = append(inv.docsIndexed, doc{filepath.Base(path), 0, 0.0})
+	inv.docsIndexed = append(inv.docsIndexed, doc{filepath.Base(path), 0, 0.0, x + 1})
 	pdoc := &inv.docsIndexed[x]
 
 	data, err := ioutil.ReadAll(file)
@@ -89,17 +129,11 @@ func (inv *InvIndex) IndexDocument(path string) error {
 				list[l-1].freq = vFreq
 				pdoc.size++
 				continue
-			} else {
-				vDocID := encodeVariant(x + 1)
-				inv.index[lword] = append(list, posting{vDocID, []byte{uint8(1)}})
-				pdoc.size++
-				continue
 			}
-		} else {
-			vDocID := encodeVariant(x + 1)
-			inv.index[lword] = append(list, posting{vDocID, []byte{uint8(1)}})
-			pdoc.size++
 		}
+		vDocID := encodeVariant(x + 1)
+		inv.index[lword] = append(list, posting{vDocID, []byte{uint8(1)}})
+		pdoc.size++
 	}
 	return nil
 }
@@ -142,16 +176,15 @@ func (inv *InvIndex) numberOfDocuments() int {
 
 func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 	query := make(map[string]int)
+	str := strings.Split(word, " ")
+	for _, val := range str {
+		(query[strings.ToLower(val)])++
+	}
 	collectionSize := float64(inv.computeCollectionSize())
 	N := float64(inv.numberOfDocuments())
 	k1 := 1.2
 	b := 0.75
 	k3 := 100000.00
-
-	str := strings.Split(word, " ")
-	for _, val := range str {
-		(query[strings.ToLower(val)])++
-	}
 	for i := 0; i < len(query); i++ {
 		if num, ok := query[str[i]]; ok {
 			ft := float64(len(inv.index[str[i]]))
@@ -163,10 +196,11 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 				currentFreq := decodeVariant(qlist[j].freq)
 				fdt := float64(currentFreq)
 				currentDocID := decodeVariant(qlist[j].docID)
-				wd := float64(inv.docsIndexed[currentDocID-1].size)
+				matched := inv.matchingDocId(currentDocID)
+				wd := float64(inv.docsIndexed[matched-1].size)
 				Kd := k1 * ((1.0 - b) + b*wd/wa)
 				wdt := (k1 + 1.0) * fdt / (Kd + fdt)
-				inv.docsIndexed[currentDocID-1].score += wqt * wdt
+				inv.docsIndexed[matched-1].score += wdt * wqt
 			}
 		}
 	}
@@ -177,8 +211,21 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 	for i := 0; i < num; i++ {
 		results = append(results, inv.docsIndexed[i])
 	}
-
+	inv.clearDocScore()
 	return results, nil
+}
+func (inv *InvIndex) clearDocScore() {
+	for i := range inv.docsIndexed {
+		inv.docsIndexed[i].score = 0.0
+	}
+}
+func (inv *InvIndex) matchingDocId(dId int) int {
+	for i := range inv.docsIndexed {
+		if inv.docsIndexed[i].docID == dId {
+			return i + 1
+		}
+	}
+	return -1
 }
 
 func (d byScore) Len() int { return len(d) }
