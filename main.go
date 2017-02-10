@@ -1,39 +1,27 @@
 package main
 
 import (
+	"bufio"
 	"flag"
+	"fmt"
 	invIndex "invertedIndex"
 	"log"
 	"os"
-	"path/filepath"
-	"regexp"
 	"time"
 )
 
-func findDocuments(inv *invIndex.InvIndex) filepath.WalkFunc {
-	return func(path string, f os.FileInfo, err error) error {
+func getInput(input chan string) {
+	for {
+		query := bufio.NewReader(os.Stdin)
+		result, err := query.ReadString('\n')
 		if err != nil {
-			log.Print(err)
-			return nil
+			log.Fatal(err)
 		}
-		if !f.IsDir() {
-			matched, err := regexp.MatchString(".txt", f.Name())
-			if err == nil && matched {
-				if err := inv.IndexDocument(path); err != nil {
-					log.Fatal(err)
-				}
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-		}
-		return nil
+		input <- result
 	}
 }
 
 func main() {
-	start := time.Now()
-
 	var filedir string
 	flag.StringVar(&filedir, "filedir", "", "Directory you wish to access")
 	flag.Parse()
@@ -41,27 +29,30 @@ func main() {
 		log.Fatal("not enough arguments")
 	}
 
-	file := invIndex.SafeOpenFile()
-	invIndex.WriteHeader(file)
-	
 	inv := invIndex.NewIndex()
-	err := filepath.Walk(filedir, findDocuments(inv))
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	topTen := 10
-	results, err := inv.SearchTopKQuery("the big bad wolf", topTen)
-	if err != nil {
-		log.Fatal()
-	}
-	for _, res := range results {
-		invIndex.WriteToFile(file, res)
-	}
+	var checkForNewFile bool
+	input := make(chan string, 1)
+	go getInput(input)
 
-	invIndex.CloseFile(file)
-	elapsed := time.Since(start)
-	log.Printf("index creation took %s", elapsed)
-
+	for {
+		file := invIndex.SafeOpenFile()
+		invIndex.WriteHeader(file)
+		inv.SearchDocuments(filedir, checkForNewFile)
+		checkForNewFile = true
+		topTen := 10
+		fmt.Println("type your query")
+		select {
+		case q := <-input:
+			results, err := inv.SearchTopKQuery(q, topTen)
+			if err != nil {
+				log.Fatal()
+			}
+			for _, res := range results {
+				invIndex.WriteToFile(file, res)
+			}
+		}
+		invIndex.CloseFile(file)
+		time.Sleep(time.Minute)
+	}
 }
-
