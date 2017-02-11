@@ -46,11 +46,6 @@ func SafeOpenFile() *os.File {
 func WriteToFile(file *os.File, d doc) {
 	fmt.Fprintf(file, "%s,%d,%.4f\n", d.name, d.size, d.score)
 }
-func (inv *InvIndex) Write() {
-	for _, v := range inv.docsIndexed {
-		fmt.Println(v.name)
-	}
-}
 
 func CloseFile(file *os.File) {
 	err := file.Close()
