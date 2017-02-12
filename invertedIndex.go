@@ -21,7 +21,7 @@ type doc struct {
 
 type posting struct {
 	docID []byte
-	freq  int
+	freq  uint16
 }
 
 type InvIndex struct {
