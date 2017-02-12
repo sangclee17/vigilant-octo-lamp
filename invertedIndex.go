@@ -21,7 +21,7 @@ type doc struct {
 
 type posting struct {
 	docID []byte
-	freq  []byte
+	freq  int
 }
 
 type InvIndex struct {
@@ -45,6 +45,11 @@ func SafeOpenFile() *os.File {
 
 func WriteToFile(file *os.File, d doc) {
 	fmt.Fprintf(file, "%s,%d,%.4f\n", d.name, d.size, d.score)
+}
+func (inv *InvIndex) Write() {
+	for _, v := range inv.docsIndexed {
+		fmt.Println(v.name)
+	}
 }
 
 func CloseFile(file *os.File) {
@@ -120,14 +125,13 @@ func (inv *InvIndex) IndexDocument(path string) error {
 		if l > 0 {
 			docIDInt := decodeVariant(list[l-1].docID)
 			if docIDInt == x+1 {
-				vFreq := encodeVariant(termCount[lword])
-				list[l-1].freq = vFreq
+				list[l-1].freq = termCount[lword]
 				pdoc.size++
 				continue
 			}
 		}
 		vDocID := encodeVariant(x + 1)
-		inv.index[lword] = append(list, posting{vDocID, []byte{uint8(1)}})
+		inv.index[lword] = append(list, posting{vDocID, 1})
 		pdoc.size++
 	}
 	return nil
@@ -188,14 +192,13 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 			wa := collectionSize / N
 			qlist := inv.index[str[i]]
 			for j := range qlist {
-				currentFreq := decodeVariant(qlist[j].freq)
-				fdt := float64(currentFreq)
+				fdt := float64(qlist[j].freq)
 				currentDocID := decodeVariant(qlist[j].docID)
 				matched := inv.matchingDocId(currentDocID)
-				wd := float64(inv.docsIndexed[matched-1].size)
+				wd := float64(inv.docsIndexed[matched].size)
 				Kd := k1 * ((1.0 - b) + b*wd/wa)
 				wdt := (k1 + 1.0) * fdt / (Kd + fdt)
-				inv.docsIndexed[matched-1].score += wdt * wqt
+				inv.docsIndexed[matched].score += wdt * wqt
 			}
 		}
 	}
@@ -209,15 +212,17 @@ func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 	inv.clearDocScore()
 	return results, nil
 }
+
 func (inv *InvIndex) clearDocScore() {
 	for i := range inv.docsIndexed {
 		inv.docsIndexed[i].score = 0.0
 	}
 }
+
 func (inv *InvIndex) matchingDocId(dId int) int {
 	for i := range inv.docsIndexed {
 		if inv.docsIndexed[i].docID == dId {
-			return i + 1
+			return i
 		}
 	}
 	return -1
