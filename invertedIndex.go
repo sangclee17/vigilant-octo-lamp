@@ -105,7 +105,6 @@ func (inv *InvIndex) IndexDocument(path string) error {
 	if err != nil {
 		log.Fatal(err)
 	}
-	termCount := make(map[string]int)
 	x := len(inv.docsIndexed)
 	inv.docsIndexed = append(inv.docsIndexed, doc{filepath.Base(path), 0, 0.0, x + 1})
 	pdoc := &inv.docsIndexed[x]
@@ -119,13 +118,12 @@ func (inv *InvIndex) IndexDocument(path string) error {
 		bword := bytes.Trim(bword, ".,-~?!\"'`;:()<>[]{}\\|/=_+*&^%$#@")
 		word := string(bword)
 		lword := strings.ToLower(word)
-		termCount[lword]++
 		list := inv.index[lword]
 		l := len(list)
 		if l > 0 {
 			docIDInt := decodeVariant(list[l-1].docID)
 			if docIDInt == x+1 {
-				list[l-1].freq = termCount[lword]
+				list[l-1].freq++
 				pdoc.size++
 				continue
 			}
