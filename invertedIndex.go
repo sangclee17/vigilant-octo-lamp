@@ -19,14 +19,11 @@ type doc struct {
 	docID int
 }
 
-type posting struct {
-	docID []byte
-	freq  uint16
-}
-
 type InvIndex struct {
-	index       map[string][]posting
-	docsIndexed []doc
+	docIds             map[string][]byte
+	freqs              map[string][]byte
+	docsIndexed        []doc
+	totalNumberOfWords int
 }
 
 type byScore []doc
@@ -61,7 +58,8 @@ func CloseFile(file *os.File) {
 
 func NewIndex() *InvIndex {
 	var inv InvIndex
-	inv.index = make(map[string][]posting)
+	inv.docIds = make(map[string][]byte)
+	inv.freqs = make(map[string][]byte)
 	inv.docsIndexed = make([]doc, 0, 0)
 	return &inv
 }
@@ -105,6 +103,7 @@ func (inv *InvIndex) IndexDocument(path string) error {
 	if err != nil {
 		log.Fatal(err)
 	}
+	termCount := make(map[string]int)
 	x := len(inv.docsIndexed)
 	inv.docsIndexed = append(inv.docsIndexed, doc{filepath.Base(path), 0, 0.0, x + 1})
 	pdoc := &inv.docsIndexed[x]
@@ -118,19 +117,16 @@ func (inv *InvIndex) IndexDocument(path string) error {
 		bword := bytes.Trim(bword, ".,-~?!\"'`;:()<>[]{}\\|/=_+*&^%$#@")
 		word := string(bword)
 		lword := strings.ToLower(word)
-		list := inv.index[lword]
-		l := len(list)
-		if l > 0 {
-			docIDInt := decodeVariant(list[l-1].docID)
-			if docIDInt == x+1 {
-				list[l-1].freq++
-				pdoc.size++
-				continue
-			}
-		}
-		vDocID := encodeVariant(x + 1)
-		inv.index[lword] = append(list, posting{vDocID, 1})
+		termCount[lword]++
 		pdoc.size++
+		inv.totalNumberOfWords++
+	}
+
+	encodedId := encodeVariant(x + 1)
+	for word, cnt := range termCount {
+		encodedFreq := encodeVariant(cnt)
+		inv.docIds[word] = append(inv.docIds[word], encodedId...)
+		inv.freqs[word] = append(inv.freqs[word], encodedFreq...)
 	}
 	return nil
 }
@@ -145,7 +141,7 @@ func encodeVariant(num int) []uint8 {
 	return output
 }
 
-func decodeVariant(num []uint8) int {
+func decodeVariant(num []uint8) (int, int) {
 	var res int
 	var i int
 	for {
@@ -155,16 +151,7 @@ func decodeVariant(num []uint8) int {
 		}
 		i++
 	}
-	return res
-}
-
-func (inv *InvIndex) computeCollectionSize() int {
-	var totalNumberOfWords int
-
-	for _, in := range inv.docsIndexed {
-		totalNumberOfWords += in.size
-	}
-	return totalNumberOfWords
+	return res, i + 1
 }
 
 func (inv *InvIndex) numberOfDocuments() int {
@@ -173,33 +160,41 @@ func (inv *InvIndex) numberOfDocuments() int {
 
 func (inv *InvIndex) SearchTopKQuery(word string, num int) ([]doc, error) {
 	query := make(map[string]int)
-	str := strings.Split(word, " ")
-	for _, val := range str {
-		(query[strings.ToLower(val)])++
+	lowCaseWord := strings.ToLower(word)
+	str := strings.Split(lowCaseWord, " ")
+	for i := range str {
+		(query[str[i]])++
 	}
-	collectionSize := float64(inv.computeCollectionSize())
+	collectionSize := float64(inv.totalNumberOfWords)
 	N := float64(inv.numberOfDocuments())
 	k1 := 1.2
 	b := 0.75
 	k3 := 100000.00
-	for i := 0; i < len(query); i++ {
-		if num, ok := query[str[i]]; ok {
-			ft := float64(len(inv.index[str[i]]))
-			fqt := float64(num)
-			wqt := math.Log((N-ft+0.5)/(ft+0.5)) * (k3 + 1) * fqt / (k3 + fqt)
-			wa := collectionSize / N
-			qlist := inv.index[str[i]]
-			for j := range qlist {
-				fdt := float64(qlist[j].freq)
-				currentDocID := decodeVariant(qlist[j].docID)
-				matched := inv.matchingDocId(currentDocID)
-				wd := float64(inv.docsIndexed[matched].size)
-				Kd := k1 * ((1.0 - b) + b*wd/wa)
-				wdt := (k1 + 1.0) * fdt / (Kd + fdt)
-				inv.docsIndexed[matched].score += wdt * wqt
-			}
+	for qword, cnt := range query {
+		ft := float64(len(inv.docIds[qword]))
+		fqt := float64(cnt)
+		wqt := math.Log((N-ft+0.5)/(ft+0.5)) * (k3 + 1) * fqt / (k3 + fqt)
+		wa := collectionSize / N
+
+		docIds := inv.docIds[qword]
+		fReqs := inv.freqs[qword]
+
+		docPtr := 0
+		freqPtr := 0
+
+		for docPtr < len(docIds) {
+			currentDocId, readBytes := decodeVariant(docIds[docPtr:])
+			docPtr += readBytes
+			currentFreq, readByte := decodeVariant(fReqs[freqPtr:])
+			freqPtr += readByte
+			matchedDocId := inv.matchingDocId(currentDocId)
+			wd := float64(inv.docsIndexed[matchedDocId].size)
+			Kd := k1 * ((1.0 - b) + b*wd/wa)
+			wdt := (k1 + 1.0) * float64(currentFreq) / (Kd + float64(currentFreq))
+			inv.docsIndexed[matchedDocId].score += wdt * wqt
 		}
 	}
+
 	sort.Sort(byScore(inv.docsIndexed))
 
 	var results []doc
@@ -217,9 +212,9 @@ func (inv *InvIndex) clearDocScore() {
 	}
 }
 
-func (inv *InvIndex) matchingDocId(dId int) int {
+func (inv *InvIndex) matchingDocId(docId int) int {
 	for i := range inv.docsIndexed {
-		if inv.docsIndexed[i].docID == dId {
+		if inv.docsIndexed[i].docID == docId {
 			return i
 		}
 	}
